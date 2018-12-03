@@ -161,24 +161,35 @@ class SaferOffensiveReflexAgent(ReflexCaptureAgent):
     successor = self.getSuccessor(gameState, action)
     foodList = self.getFood(successor).asList()
     enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
-    features['successorScore'] = -len(foodList)#self.getScore(successor)
+    features['foodCollected'] = 20-len(foodList)-self.getScore(successor)
+    features['successorScore'] = self.getScore(successor)
 
+    myPos = successor.getAgentState(self.index).getPosition()
     # Compute distance to the nearest food
 
     if len(foodList) > 0: # This should always be True,  but better safe than sorry
-      myPos = successor.getAgentState(self.index).getPosition()
       minDistance = min([self.getMazeDistance(myPos, food) for food in foodList])
       features['distanceToFood'] = minDistance
 
     if len(enemies) > 0:
-        myPos = successor.getAgentState(self.index).getPosition()
-        defenders = [a for a in enemies if a.isPacman and a.getPosition() != None]
-        minDistEnemies = min([self.getMazeDistance(myPos, enemy.getPosition()) for enemy in defenders])
-        features['distanceToEnemy'] = minDistEnemies
+        defenders = [a for a in enemies if not a.isPacman and a.getPosition() != None]
+        if len(defenders) > 0:
+            minDistEnemies = min([self.getMazeDistance(myPos, enemy.getPosition()) for enemy in defenders])
+            if minDistEnemies == 1:
+                features['danger'] = float('inf')
+            else:
+                invDist = max(0,20-minDistEnemies)
+                features['danger'] = invDist*invDist
+    if action == Directions.STOP: features['stop'] = 1
+    myState = successor.getAgentState(self.index)
+    if myState.isPacman and len(foodList) + self.getScore(successor) < 20:
+        dist = self.getMazeDistance(self.start,myPos)
+        foodCollected = 20-self.getScore(successor)-len(foodList)
+        features['retScore'] = -dist*foodCollected*foodCollected
     return features
 
   def getWeights(self, gameState, action):
-    return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 1}
+    return {'successorScore': 10000, 'foodCollected': 1000, 'distanceToFood': -100, 'danger': -1, 'stop': -1000, 'retScore': 5}
 
 class LeadOffensiveReflexAgent(ReflexCaptureAgent):
   """

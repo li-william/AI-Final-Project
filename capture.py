@@ -964,10 +964,8 @@ def runGames( layouts, agents, display, length, numGames, record, numTraining, r
 	rules = CaptureRules()
 	games = []
 
-	print('numGames %s' % numGames)
 	if numTraining > 0:
 		print('Playing %d training games' % numTraining)
-	numGames += numTraining
 	for i in range( numGames ):
 		beQuiet = i < numTraining
 		layout = layouts[i]

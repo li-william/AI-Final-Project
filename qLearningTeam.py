@@ -5,12 +5,13 @@ from game import Directions
 import game
 from util import nearestPoint
 from game import Actions
+from baselineTeam import DefensiveReflexAgent
 
 #################
 # Team creation #
 #################
 
-DEBUG = False 
+DEBUG = True 
 interestingValues = {}
 
 def createTeam(firstIndex, secondIndex, isRed,
@@ -36,8 +37,19 @@ def createTeam(firstIndex, secondIndex, isRed,
 class ApproximateQAgent(CaptureAgent):
 
 	def __init__( self, index ):
+		print('Constructed a Q Agent.')
 		CaptureAgent.__init__(self, index)
-		self.weights = util.Counter()
+		#self.weights = util.Counter()
+		self.weights = {
+			'successorScore': 0.5,
+			'towardsFood': 0.5, 
+			'towardsGhost': 0.5, 
+			'towardsCapsule': 0.5, 
+			'distanceToCapsule': 0.5,
+			'distanceToFood': 0.5,
+			'carrying': 0.5,
+			'deadends': 0.5 
+			}
 		self.numTraining = 0
 		if 'numTraining' in interestingValues:
 			self.numTraining = interestingValues['numTraining']
@@ -50,6 +62,7 @@ class ApproximateQAgent(CaptureAgent):
 		self.start = gameState.getAgentPosition(self.index)
 		self.lastAction = None
 		CaptureAgent.registerInitialState(self, gameState)
+		self.deadEnds = {}
 
 	def getSuccessor(self, gameState, action):
 		"""
@@ -125,9 +138,14 @@ class ApproximateQAgent(CaptureAgent):
 			minDistance = min([self.getMazeDistance(myPos, food) for food in foodList])
 			sucFoodDistance = min([self.getMazeDistance(sucPos, food) for food in foodList])
 			features['towardsFood'] = minDistance-sucFoodDistance
+			if sucFoodDistance == 0:
+				features['distanceToFood'] = 1.0 
+			else:
+				features['distanceToFood'] = 1.0/float(sucFoodDistance)
 
 		# Compute distance to closest ghost
 		features['towardsGhost'] = 0
+		features['deadends']=0
 		enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
 		inRange = filter(lambda x: not x.isPacman and x.getPosition() != None and self.getMazeDistance(myPos,x.getPosition())<5 and x.scaredTimer<5, enemies)
 		if len(inRange) > 0:
@@ -135,26 +153,41 @@ class ApproximateQAgent(CaptureAgent):
 			closest = min(positions, key=lambda x: self.getMazeDistance(myPos, x))
 			ghostDis = self.getMazeDistance(myPos, closest)
 			sucGhostDis=self.getMazeDistance(sucPos,closest)
+			for agent in inRange:
+				if agent.getPosition()==closest:
+					fear=agent
+
+			#going to deadends
+			if self.deadEnds.has_key((myPos, action)) and self.deadEnds[(myPos, action)] * 2 < ghostDis:
+				features['deadends'] =1
+
 			#the ghost is about to eat pacman
-			if ghostDis<3:
-				runaway=sucGhostDis-ghostDis
-				#you are eaten
+			runaway=sucGhostDis-ghostDis
+			#you are eaten
+			if fear.scaredTimer<3 and fear.scaredTimer!=0:
+				if runaway>10:
+					features['towardsGhost']=100
+				else:
+					features['towardsGhost']=-runaway
+			else:
 				if runaway>10:
 					features['towardsGhost']=-100
 				else:
 					features['towardsGhost']=runaway
-				capsuleList = self.getCapsules(gameState)
-				if len(capsuleList) > 0:
-					minCapDistance = min([self.getMazeDistance(myPos, c) for c in capsuleList])
-					sucCapDistance=min([self.getMazeDistance(sucPos, c) for c in capsuleList])
-					features['towardsCapsule'] = minCapDistance-sucCapDistance
-				else:
-					features['towardsCapsule'] = 0
+
+			capsuleList = self.getCapsules(gameState)
+			if len(capsuleList) > 0:
+				minCapDistance = min([self.getMazeDistance(myPos, c) for c in capsuleList])
+				sucCapDistance=min([self.getMazeDistance(sucPos, c) for c in capsuleList])
+				features['towardsCapsule'] = minCapDistance-sucCapDistance
+			else:
+				features['towardsCapsule'] = 0
+
 		# Compute distance to the nearest capsule
 		capsuleList = self.getCapsules(successor)
 		if len(capsuleList) > 0:
 			minDistance = min([self.getMazeDistance(myPos, c) for c in capsuleList])
-			features['distanceToCapsule'] = minDistance
+			features['distanceToCapsule'] = 1.0/float(minDistance)
 		else:
 			features['distanceToCapsule'] = 0
 
@@ -163,15 +196,7 @@ class ApproximateQAgent(CaptureAgent):
 		return features
 
 	def getWeights(self):
-		# Most positive = best choice
-		return {
-			'successorScore': 500,
-			'towardsFood': 200, 
-			'towardsGhost': 500, 
-			'towardsCapsule': 300, 
-			'distanceToCapsule': -300,
-			'carrying': 100
-			}
+		return self.weights
 
 	def getQValue(self, state, action):
 		"""
@@ -180,6 +205,7 @@ class ApproximateQAgent(CaptureAgent):
 		"""
 		total = 0
 		weights = self.getWeights()
+		# print(weights)
 		features = self.getFeatures(state, action)
 		for feature in features:
 			# Implements the Q calculation
@@ -236,7 +262,7 @@ class ApproximateQAgent(CaptureAgent):
 
 	def getReward(self, gameState):
 		foodList = self.getFood(gameState).asList()
-		return -len(foodList)
+		return 1.0/float(len(foodList))
 
 	def observationFunction(self, gameState):
 		if len(self.observationHistory) > 0 and self.isTraining():
@@ -268,8 +294,10 @@ class ApproximateQAgent(CaptureAgent):
 				print "AGENT " + str(self.index) + " weights for " + feature + ": " + str(newWeights[feature]) + " ---> " + str(newWeight)
 			newWeights[feature]  = newWeight
 		self.weights = newWeights.copy()
-		# print "WEIGHTS AFTER UPDATE"
-		# print self.weights
+		if DEBUG:
+			print("Difference %s" % difference)
+			print "WEIGHTS AFTER UPDATE"
+			print self.weights
 
 	def newline(self):
 		return "-------------------------------------------------------------------------"

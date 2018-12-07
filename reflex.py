@@ -62,11 +62,20 @@ class ReflexCaptureAgent(CaptureAgent):
     self.start = gameState.getAgentPosition(self.index)
     CaptureAgent.registerInitialState(self, gameState)
 
+    boundary = (gameState.data.layout.width - 2) / 2 if self.red else ((gameState.data.layout.width - 2) / 2) + 1
+
+    self.boundary = []
+    for i in range(1, gameState.data.layout.height - 1):
+        if not gameState.hasWall(boundary, i):
+            self.boundary.append((boundary, i))
+
+  def nearbyEnemyPacman(self, successor):
+    enemies_vuln = [successor.getAgentState(i) for i in self.getOpponents(successor)]
+    return filter(lambda x: x.isPacman and x.getPosition() != None, enemies_vuln)
+
   def chooseAction(self, gameState):
-    """
-    Picks among the actions with the highest Q(s,a).
-    """
     actions = gameState.getLegalActions(self.index)
+    actions.remove(Directions.STOP)
 
     # You can profile your evaluation time by uncommenting these lines
     # start = time.time()
@@ -127,122 +136,112 @@ class ReflexCaptureAgent(CaptureAgent):
     """
     return {'successorScore': 1.0}
 
-class OffensiveReflexAgent(ReflexCaptureAgent):
-  """
-  A reflex agent that seeks food. This is an agent
-  we give you to get an idea of what an offensive agent might look like,
-  but it is by no means the best or only way to build an offensive agent.
-  """
-  def getFeatures(self, gameState, action):
-    features = util.Counter()
-    successor = self.getSuccessor(gameState, action)
-    foodList = self.getFood(successor).asList()
-    features['successorScore'] = -len(foodList)#self.getScore(successor)
-
-    # Compute distance to the nearest food
-
-    if len(foodList) > 0: # This should always be True,  but better safe than sorry
-      myPos = successor.getAgentState(self.index).getPosition()
-      minDistance = min([self.getMazeDistance(myPos, food) for food in foodList])
-      features['distanceToFood'] = minDistance
-    return features
-
-  def getWeights(self, gameState, action):
-    return {'successorScore': 100, 'distanceToFood': -1}
-
 class SaferOffensiveReflexAgent(ReflexCaptureAgent):
   """
   A reflex agent that seeks food. This is an agent
   we give you to get an idea of what an offensive agent might look like,
   but it is by no means the best or only way to build an offensive agent.
-  """
+  """ 
   def getFeatures(self, gameState, action):
     features = util.Counter()
     successor = self.getSuccessor(gameState, action)
-    foodList = self.getFood(successor).asList()
-    enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
-    features['foodCollected'] = 20-len(foodList)-self.getScore(successor)
+
     features['successorScore'] = self.getScore(successor)
+    currPos = successor.getAgentState(self.index).getPosition()
 
-    myPos = successor.getAgentState(self.index).getPosition()
-    # Compute distance to the nearest food
+    # boundary distance (the more food being carried, the better it is to return)
+    min_boundary = min(self.getMazeDistance(currPos, bound) for bound in self.boundary)
+    features['returned'] = min_boundary
 
-    if len(foodList) > 0: # This should always be True,  but better safe than sorry
-      minDistance = min([self.getMazeDistance(myPos, food) for food in foodList])
-      features['distanceToFood'] = minDistance
+    features['carrying'] = successor.getAgentState(self.index).numCarrying
 
-    if len(enemies) > 0:
-        defenders = [a for a in enemies if not a.isPacman and a.getPosition() != None]
-        if len(defenders) > 0:
-            minDistEnemies = min([self.getMazeDistance(myPos, enemy.getPosition()) for enemy in defenders])
-            if minDistEnemies == 1:
-                features['danger'] = float('inf')
-            else:
-                invDist = max(0,20-minDistEnemies)
-                features['danger'] = invDist*invDist
-    if action == Directions.STOP: features['stop'] = 1
-    myState = successor.getAgentState(self.index)
-    if myState.isPacman and len(foodList) + self.getScore(successor) < 20:
-        dist = self.getMazeDistance(self.start,myPos)
-        foodCollected = 20-self.getScore(successor)-len(foodList)
-        features['retScore'] = -dist*foodCollected*foodCollected
+    # food distance
+    food_list = self.getFood(successor).asList()
+    if len(food_list):
+        min_food_dist = min(self.getMazeDistance(currPos, food) for food in food_list)
+        features['distanceToFood'] = min_food_dist
+
+    # capsule distance
+    capsule_list = self.getCapsules(successor)
+    if len(capsule_list) > 0:
+        min_capsule_dist = min(self.getMazeDistance(currPos, cap) for cap in capsule_list)
+        features['distanceToCapsule'] = min_capsule_dist
+    else:
+        features['distanceToCapsule'] = 0
+
+    # ghost distance
+    opponent_state = [successor.getAgentState(i) for i in self.getOpponents(successor)]
+    visible = filter(lambda x: not x.isPacman and x.getPosition() != None, opponent_state)
+    if len(visible):
+        positions = [agent.getPosition() for agent in visible]
+        closest = min(positions, key=lambda x: self.getMazeDistance(currPos, x))
+        closest_dist = self.getMazeDistance(currPos, closest)
+
+        if closest_dist <= 5:
+            features['GhostDistance'] = closest_dist
+    else:
+        noise_dist = []
+        for i in self.getOpponents(successor):
+            noise_dist.append(successor.getAgentDistances()[i])
+        features['GhostDistance'] = min(noise_dist)
+
+    # if self is ghost and pacman is less than 4 blocks away, tag it
+    visible_vuln = self.nearbyEnemyPacman(successor)
+    if len(visible_vuln) and not gameState.getAgentState(self.index).isPacman:
+        positions = [agent.getPosition() for agent in visible_vuln]
+        closest = min(positions, key=lambda x: self.getMazeDistance(currPos, x))
+        closest_dist = self.getMazeDistance(currPos, closest)
+        if closest_dist < 4:               
+            features['distanceToEnemiesPacMan'] = closest_dist
+    else:
+        features['distanceToEnemiesPacMan'] = 0
+
     return features
 
-  def getWeights(self, gameState, action):
-    return {'successorScore': 10000, 'foodCollected': 1000, 'distanceToFood': -100, 'danger': -1, 'stop': -1000, 'retScore': 5}
 
-class LeadOffensiveReflexAgent(ReflexCaptureAgent):
-  """
-  A reflex agent that seeks food. This is an agent
-  we give you to get an idea of what an offensive agent might look like,
-  but it is by no means the best or only way to build an offensive agent.
-  """
-  def getFeatures(self, gameState, action):
-    features = util.Counter()
+  def getWeights(self, gameState, action):
+    """
+    Get weights for the features used in the evaluation.
+    """
+    # If opponent is scared, the agent should not care about GhostDistance
     successor = self.getSuccessor(gameState, action)
-    foodList = self.getFood(successor).asList()
-    enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
-    features['successorScore'] = -len(foodList)#self.getScore(successor)
+    numOfFood = len(self.getFood(successor).asList())
+    numOfCarrying = successor.getAgentState(self.index).numCarrying
+    currPos = successor.getAgentState(self.index).getPosition()
 
-    currScore = self.getScore(gameState)
+    opponents = [successor.getAgentState(i) for i in self.getOpponents(successor)]
+    visible = filter(lambda x: not x.isPacman and x.getPosition() != None, opponents)
+    if len(visible):
+        for agent in visible:
+            if agent.scaredTimer > 0:
+                if agent.scaredTimer > 12:
+                    return {'successorScore': 110, 'distanceToFood': -10, 'distanceToEnemiesPacMan': 0,
+                            'GhostDistance': -1, 'distanceToCapsule': 0, 'carrying': 350, 'returned': 10-3*numOfCarrying }
 
-    if currScore < 0:
-        # Compute distance to the nearest food
+                elif 6 < agent.scaredTimer < 12 :
+                    return {'successorScore': 110+5*numOfCarrying, 'distanceToFood': -5, 'distanceToEnemiesPacMan': 0,
+                            'GhostDistance': -15, 'distanceToCapsule': -10,'carrying': 100, 'returned': -5-4*numOfCarrying,
+                            }
 
-        if len(foodList) > 0: # This should always be True,  but better safe than sorry
-          myPos = successor.getAgentState(self.index).getPosition()
-          minDistance = min([self.getMazeDistance(myPos, food) for food in foodList])
-          features['distanceToFood'] = minDistance
+            # Visible and not scared
+            else:
+                return {'successorScore': 110, 'distanceToFood': -10, 'distanceToEnemiesPacMan': 0,
+                        'GhostDistance': 20, 'distanceToCapsule': -15, 'carrying': 0, 'returned': -15,
+                        }
+            # If I am not PacMan the enemy is a pacMan, I can try to eliminate him
 
-        if len(enemies) > 0:
-            myPos = successor.getAgentState(self.index).getPosition()
-            defenders = [a for a in enemies if a.isPacman and a.getPosition() != None]
-            minDistEnemies = min([self.getMazeDistance(myPos, enemy.getPosition()) for enemy in defenders])
-            features['distanceToEnemy'] = minDistEnemies
-        return features
+    # if self is ghost and pacman is less than 4 blocks away, tag it
+    visible_vuln = self.nearbyEnemyPacman(successor)
+    if len(visible_vuln) > 0 and not gameState.getAgentState(self.index).isPacman:
+        return {'successorScore': 0, 'distanceToFood': -1, 'distanceToEnemiesPacMan': -8,
+                'distanceToCapsule': 0, 'GhostDistance': 0,
+                'returned': 0, 'carrying': 10}
 
-    else:
-        # Computes whether we're on defense (1) or offense (0)
-        features['onDefense'] = 1
-        if myState.isPacman: features['onDefense'] = 0
+    # default
+    #print('d {} dtf {}'.format(action,distanceToFood))
+    return {'successorScore': 1000+numOfCarrying*3.5, 'distanceToFood': -7, 'GhostDistance': 0, 'distanceToEnemiesPacMan': 0,
+            'distanceToCapsule': -5,  'carrying': 350,'returned': 5-numOfCarrying*3}
 
-        # Computes distance to invaders we can see
-        enemies = [successor.getAgentState(i) for i in self.getOpponents(successor)]
-        invaders = [a for a in enemies if a.isPacman and a.getPosition() != None]
-        features['numInvaders'] = len(invaders)
-        if len(invaders) > 0:
-          dists = [self.getMazeDistance(myPos, a.getPosition()) for a in invaders]
-          features['invaderDistance'] = min(dists)
-
-        if action == Directions.STOP: features['stop'] = 1
-        rev = Directions.REVERSE[gameState.getAgentState(self.index).configuration.direction]
-        if action == rev: features['reverse'] = 1
-
-        return features
-
-
-  def getWeights(self, gameState, action):
-    return {'successorScore': 100, 'distanceToFood': -1, 'distanceToEnemy': 1}
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
   """

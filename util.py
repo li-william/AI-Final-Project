@@ -315,6 +315,14 @@ class Counter(dict):
         for key in self.keys():
             self[key] = self[key] / total
 
+    def myNormalize(self):
+        total=0
+        for v in self.values():
+            total+=abs(v)
+        if total == 0: return
+        for key in self.keys():
+            self[key]/=total
+
     def divideAll(self, divisor):
         """
         Divides all counts by divisor

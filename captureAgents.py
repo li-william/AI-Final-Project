@@ -322,9 +322,9 @@ class ReflexCaptureAgent(CaptureAgent):
         if not gameState.hasWall(boundary, i):
             self.boundary.append((boundary, i))
 
-  def nearbyEnemyPacman(self, successor):
+  def nearbyEnemyPacman(self, currPos, successor):
     enemies_vuln = [successor.getAgentState(i) for i in self.getOpponents(successor)]
-    return filter(lambda x: x.isPacman and x.getPosition() != None, enemies_vuln)
+    return filter(lambda x: x.isPacman and x.getPosition() != None and self.getMazeDistance(currPos,x.getPosition())<6, enemies_vuln)
 
   def chooseAction(self, gameState):
     actions = gameState.getLegalActions(self.index)
@@ -404,7 +404,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
 
     # boundary distance (the more food being carried, the better it is to return)
     min_boundary = min(self.getMazeDistance(currPos, bound) for bound in self.boundary)
-    features['returned'] = min_boundary
+    features['returned'] = 50-min_boundary
 
     features['carrying'] = successor.getAgentState(self.index).numCarrying
 
@@ -412,19 +412,29 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
     food_list = self.getFood(successor).asList()
     if len(food_list):
         min_food_dist = min(self.getMazeDistance(currPos, food) for food in food_list)
-        features['distanceToFood'] = min_food_dist
+        features['distanceToFood'] = 50-min_food_dist
 
+    food_list = self.getFood(gameState).asList()
+    for food in food_list:
+        if currPos == food:
+            features['distanceToFood'] = 50
+        
     # capsule distance
     capsule_list = self.getCapsules(successor)
     if len(capsule_list) > 0:
         min_capsule_dist = min(self.getMazeDistance(currPos, cap) for cap in capsule_list)
-        features['distanceToCapsule'] = min_capsule_dist
+        features['distanceToCapsule'] = 50-min_capsule_dist
     else:
         features['distanceToCapsule'] = 0
+    
+    capsule_list = self.getCapsules(gameState)
+    for c in capsule_list:
+        if currPos == c:
+            features['distanceToCapsule'] = 50
 
     # ghost distance
     opponent_state = [successor.getAgentState(i) for i in self.getOpponents(successor)]
-    visible = filter(lambda x: not x.isPacman and x.getPosition() != None, opponent_state)
+    visible = filter(lambda x: not x.isPacman and x.getPosition() != None and self.getMazeDistance(currPos,x.getPosition())<6, opponent_state)
     scaredTime = -1
     if len(visible):
         scaredTime = visible[0].scaredTimer
@@ -433,20 +443,22 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         closest_dist = self.getMazeDistance(currPos, closest)
 
         if closest_dist <= 5:
-            features['GhostDistance'] = 20*closest_dist
+            features['GhostDistance'] = closest_dist
+    '''
     else:
         noise_dist = []
         for i in self.getOpponents(successor):
             noise_dist.append(successor.getAgentDistances()[i])
         features['GhostDistance'] = min(noise_dist)
+    '''
     # if self is ghost and pacman is less than 4 blocks away, tag it
-    visible_vuln = self.nearbyEnemyPacman(successor)
+    visible_vuln = self.nearbyEnemyPacman(currPos,successor)
     if len(visible_vuln) and not gameState.getAgentState(self.index).isPacman:
         positions = [agent.getPosition() for agent in visible_vuln]
         closest = min(positions, key=lambda x: self.getMazeDistance(currPos, x))
         closest_dist = self.getMazeDistance(currPos, closest)
         if closest_dist < 4:               
-            features['distanceToEnemiesPacMan'] = closest_dist
+            features['distanceToEnemiesPacMan'] = 50-closest_dist
     else:
         features['distanceToEnemiesPacMan'] = 0
 
@@ -454,14 +466,16 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
         features['distanceToEnemiesPacMan'] = 0
         if scaredTime > 0:
             if scaredTime > 12:
-                features['returned']*=(10-3*features['carrying'])
+                features['returned']*=2*features['carrying']
+                features['returned']+=20
             elif 6<scaredTime<12:
-                features['GhostDistance']*=15 
-                features['returned']*=(-5-4*features['carrying'])
+                features['GhostDistance'] = (20-features['GhostDistance'])*15 
+                features['returned']*=3*features['carrying']
+                features['returned']-=10
         else:
-            features['GhostDistance']*=-20
+            features['GhostDistance']*=20
             features['carrying'] = 0
-            features['returned']*=-15
+            features['returned'] = 0
     elif len(visible_vuln) and not gameState.getAgentState(self.index).isPacman:
         d = features['distanceToEnemiesPacMan']
         features = util.Counter()
@@ -469,7 +483,11 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
     else:
         features['distanceToEnemiesPacMan'] = 0
         features['GhostDistance'] = 0
-        features['returned']*=(5-features['carrying']*3)
+        features['returned']*=features['carrying']*2
+        features['returned']+=20
+    if not successor.getAgentState(self.index).isPacman:
+        features['returned'] = 0
+    features['returned'] = max(features['returned'],0)
     return features 
 
 
@@ -477,8 +495,7 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
     """
     Get weights for the features used in the evaluation.
     """
-    return {'successorScore': 1000, 'distanceToFood': -7, 'GhostDistance': -1, 'distanceToEnemiesPacMan': -8,
-            'distanceToCapsule': -5,  'carrying': 350,'returned': 1}
+    return {'successorScore': 1000, 'distanceToFood': 7, 'GhostDistance': 1, 'distanceToEnemiesPacMan': 8, 'distanceToCapsule': 5, 'carrying': 350, 'returned': .25}
 
 
 class DefensiveReflexAgent(ReflexCaptureAgent):

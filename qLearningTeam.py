@@ -11,7 +11,7 @@ from baselineTeam import DefensiveReflexAgent
 # Team creation #
 #################
 
-DEBUG = True 
+DEBUG = False 
 interestingValues = {}
 
 def createTeam(firstIndex, secondIndex, isRed,
